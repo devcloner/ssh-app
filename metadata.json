@@ -1,0 +1,6 @@
+{
+  "name": "TermiAgent",
+  "description": "Safe, low-latency, SSH & Tailscale host manager controlled by natural language Gemini AI agents.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
