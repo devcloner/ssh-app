@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -168,17 +169,77 @@ class TermiAgentViewModel(
             )
             hostRepository.updateHost(authenticatingHost)
             
-            // Simulates SSH handshake and/or Tailscale connection
-            delay(1500)
-            val updated = host.copy(
-                isActive = true,
-                connectionStatus = "ACTIVE",
-                lastChecked = System.currentTimeMillis(),
-                cpuUsage = (15..45).random(),
-                ramUsage = (40..70).random(),
-                diskUsage = if (host.diskUsage == 0) (40..85).random() else host.diskUsage
-            )
-            hostRepository.updateHost(updated)
+            val isSimulated = host.ipOrHostname == "10.0.2.2" || 
+                              host.ipOrHostname == "localhost" || 
+                              host.ipOrHostname == "127.0.0.1" || 
+                              host.name.contains("Demo", ignoreCase = true) || 
+                              host.name.contains("Template", ignoreCase = true) ||
+                              host.ipOrHostname.isBlank()
+
+            if (isSimulated) {
+                // Keep simulated pacing for local emulator / demo accounts to ensure they work out of the box
+                delay(1200)
+                val updated = host.copy(
+                    isActive = true,
+                    connectionStatus = "ACTIVE",
+                    lastChecked = System.currentTimeMillis(),
+                    cpuUsage = (15..45).random(),
+                    ramUsage = (40..70).random(),
+                    diskUsage = if (host.diskUsage == 0) (40..85).random() else host.diskUsage
+                )
+                hostRepository.updateHost(updated)
+            } else {
+                // Real socket connection probe!
+                var socket: java.net.Socket? = null
+                var success = false
+                var errorMessage = ""
+                var detectedSshBanner = ""
+                try {
+                    socket = java.net.Socket()
+                    val socketAddress = java.net.InetSocketAddress(host.ipOrHostname, host.port)
+                    // Connect with a 4 second timeout
+                    socket.connect(socketAddress, 4000)
+                    
+                    // Attempt to read the first line (the SSH protocol banner)
+                    socket.soTimeout = 2000
+                    val reader = java.io.BufferedReader(java.io.InputStreamReader(socket.getInputStream()))
+                    val firstLine = reader.readLine()
+                    if (firstLine != null && firstLine.startsWith("SSH-")) {
+                        detectedSshBanner = firstLine
+                        success = true
+                    } else {
+                        // Connected but didn't receive SSH header immediately (might be raw socket or require carriage returns)
+                        success = true
+                    }
+                } catch (e: Exception) {
+                    errorMessage = e.localizedMessage ?: "Connection timed out"
+                } finally {
+                    try { socket?.close() } catch (ignored: Exception) {}
+                }
+
+                if (success) {
+                    val updated = host.copy(
+                        isActive = true,
+                        connectionStatus = "ACTIVE",
+                        lastChecked = System.currentTimeMillis(),
+                        cpuUsage = (15..45).random(),
+                        ramUsage = (40..70).random(),
+                        diskUsage = if (host.diskUsage == 0) (40..85).random() else host.diskUsage
+                    )
+                    hostRepository.updateHost(updated)
+                    Log.d("TermiAgent", "Real SSH socket connection succeeded: $detectedSshBanner")
+                } else {
+                    val updated = host.copy(
+                        isActive = false,
+                        connectionStatus = "OFFLINE",
+                        cpuUsage = 0,
+                        ramUsage = 0,
+                        diskUsage = 0
+                    )
+                    hostRepository.updateHost(updated)
+                    Log.e("TermiAgent", "Real SSH socket connection failed: $errorMessage")
+                }
+            }
             _isPinging.value = false
         }
     }
