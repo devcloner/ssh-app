@@ -15,6 +15,7 @@ data class Host(
     val useTailscale: Boolean = false,
     val tailscaleIp: String = "",
     val isActive: Boolean = false,
+    val connectionStatus: String = "OFFLINE", // "ACTIVE", "OFFLINE", "AUTHENTICATING"
     val lastChecked: Long = 0,
     val cpuUsage: Int = 0,
     val ramUsage: Int = 0,

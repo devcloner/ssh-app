@@ -30,25 +30,33 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ChatMessage
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.TermiAgentViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.ui.graphics.StrokeCap
+
+import com.example.data.model.Host
 
 @Composable
 fun ChatScreen(
     viewModel: TermiAgentViewModel,
     onOpenDrawer: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onNavigateToDashboard: (() -> Unit)? = null
 ) {
     val selectedHost by viewModel.selectedHost.collectAsState()
+    val hosts by viewModel.hosts.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val currentText by viewModel.currentMessageText.collectAsState()
     val isQuerying by viewModel.isQueryingAgent.collectAsState()
     val useHighThinking by viewModel.useHighThinking.collectAsState()
     val isOptimizing by viewModel.isOptimizingPrompt.collectAsState()
+    val previousAiCommands by viewModel.previousAiCommands.collectAsState()
 
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -134,14 +142,20 @@ fun ChatScreen(
                         } else {
                             AgentResponseCard(
                                 message = message,
-                                onExecute = { viewModel.runShellCommand(message) }
+                                hosts = hosts,
+                                viewModel = viewModel,
+                                onExecute = { viewModel.runShellCommand(message) },
+                                onNavigateToDashboard = onNavigateToDashboard
                             )
                         }
                     }
 
                     if (isQuerying) {
                         item {
-                            AgentThinkingPlaceholder(useHighThinking = useHighThinking)
+                            AgentThinkingPlaceholder(
+                                useHighThinking = useHighThinking,
+                                isHermes = selectedHost?.modelAgentType?.startsWith("HERMES") == true
+                            )
                         }
                     }
                 }
@@ -149,6 +163,24 @@ fun ChatScreen(
 
             // Bottom Input Row
             if (selectedHost != null) {
+                QuickActionsRow(
+                    onTriggerIntent = { intent ->
+                        viewModel.sendDirectPrompt(intent)
+                    }
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (previousAiCommands.isNotEmpty()) {
+                    PreviousAiCommandsRow(
+                        commands = previousAiCommands,
+                        onSelectCommand = { cmd ->
+                            viewModel.updateMessageText(cmd.userPrompt)
+                        },
+                        onClear = { viewModel.clearGeneratedCommands() }
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
                 CommandTemplatesRow(
                     onSelectTemplate = { template ->
                         viewModel.updateMessageText(template.promptDraft)
@@ -547,11 +579,296 @@ fun UserBubble(message: ChatMessage) {
 }
 
 @Composable
+fun ScratchpadBlock(scratchpadContent: String) {
+    var isExpanded by remember { mutableStateOf(false) }
+    val lines = remember(scratchpadContent) {
+        scratchpadContent.split("\n")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SophisticatedViewportBg),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, SophisticatedBorder, RoundedCornerShape(12.dp))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Build,
+                        contentDescription = null,
+                        tint = SophisticatedAccent,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Hermes Core Agent Reasoner Scratchpad",
+                        color = SophisticatedText,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    tint = SophisticatedTextMuted,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            AnimatedVisibility(visible = isExpanded) {
+                Column(modifier = Modifier.padding(top = 10.dp)) {
+                    HorizontalDivider(color = SophisticatedBorder.copy(alpha = 0.5f), thickness = 1.dp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    lines.forEach { line ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Text(
+                                text = "⚡",
+                                color = SophisticatedAccent,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(top = 1.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = line,
+                                color = SophisticatedText.copy(alpha = 0.85f),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LiveNodeTelemetryWidget(
+    host: Host,
+    viewModel: TermiAgentViewModel,
+    onNavigateToDashboard: (() -> Unit)? = null
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SophisticatedViewportBg),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, SophisticatedBorder, RoundedCornerShape(16.dp))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(
+                                color = if (host.isActive) SophisticatedAccent else Color(0xFFEF4444),
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = host.name,
+                        color = SophisticatedText,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "(${host.username}@${host.ipOrHostname})",
+                        color = SophisticatedTextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Refresh button
+                    IconButton(
+                        onClick = {
+                            if (!isRefreshing) {
+                                isRefreshing = true
+                                coroutineScope.launch {
+                                    viewModel.testConnection()
+                                    delay(800)
+                                    isRefreshing = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(
+                                color = SophisticatedPrimary,
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.5.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh Metrics",
+                                tint = SophisticatedPrimary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+
+                    if (onNavigateToDashboard != null) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(
+                            onClick = onNavigateToDashboard,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowForward,
+                                contentDescription = "Go to Live Dashboard",
+                                tint = SophisticatedAccent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Metrics Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // CPU
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("CPU", color = SophisticatedTextMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("${host.cpuUsage}%", color = SophisticatedText, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { host.cpuUsage / 100f },
+                        color = when {
+                            host.cpuUsage < 50 -> SophisticatedAccent
+                            host.cpuUsage < 80 -> Color(0xFFFBBF24)
+                            else -> Color(0xFFEF4444)
+                        },
+                        trackColor = SophisticatedSurface,
+                        strokeCap = StrokeCap.Round,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                }
+
+                // RAM
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("RAM", color = SophisticatedTextMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("${host.ramUsage}%", color = SophisticatedText, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { host.ramUsage / 100f },
+                        color = when {
+                            host.ramUsage < 60 -> SophisticatedAccent
+                            host.ramUsage < 85 -> Color(0xFFFBBF24)
+                            else -> Color(0xFFEF4444)
+                        },
+                        trackColor = SophisticatedSurface,
+                        strokeCap = StrokeCap.Round,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                }
+
+                // Storage
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("DISK", color = SophisticatedTextMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("${host.diskUsage}%", color = SophisticatedText, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { host.diskUsage / 100f },
+                        color = when {
+                            host.diskUsage < 70 -> SophisticatedAccent
+                            host.diskUsage < 90 -> Color(0xFFFBBF24)
+                            else -> Color(0xFFEF4444)
+                        },
+                        trackColor = SophisticatedSurface,
+                        strokeCap = StrokeCap.Round,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun AgentResponseCard(
     message: ChatMessage,
-    onExecute: () -> Unit
+    hosts: List<Host>,
+    viewModel: TermiAgentViewModel,
+    onExecute: () -> Unit,
+    onNavigateToDashboard: (() -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
+    val hostOfMessage = remember(message.hostId, hosts) {
+        hosts.find { it.id == message.hostId }
+    }
+
+    val rawText = message.messageText
+    val hasScratchpad = rawText.contains("<scratchpad>") && rawText.contains("</scratchpad>")
+    val (scratchpadContent, cleanMessageText) = if (hasScratchpad) {
+        val startIndex = rawText.indexOf("<scratchpad>")
+        val endIndex = rawText.indexOf("</scratchpad>")
+        val scratchText = rawText.substring(startIndex + "<scratchpad>".length, endIndex).trim()
+        val cleanText = (rawText.substring(0, startIndex) + rawText.substring(endIndex + "</scratchpad>".length)).trim()
+        Pair(scratchText, cleanText)
+    } else {
+        Pair(null, rawText)
+    }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = SophisticatedSurface),
@@ -572,10 +889,26 @@ fun AgentResponseCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = message.messageText,
+                    text = cleanMessageText,
                     color = SophisticatedText,
                     fontSize = 14.sp,
                     lineHeight = 20.sp
+                )
+            }
+
+            // Scratchpad block
+            if (!scratchpadContent.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                ScratchpadBlock(scratchpadContent = scratchpadContent)
+            }
+
+            // Native Dashboard Telemetry Widget
+            hostOfMessage?.let { host ->
+                Spacer(modifier = Modifier.height(12.dp))
+                LiveNodeTelemetryWidget(
+                    host = host,
+                    viewModel = viewModel,
+                    onNavigateToDashboard = onNavigateToDashboard
                 )
             }
 
@@ -792,36 +1125,137 @@ fun AgentResponseCard(
 }
 
 @Composable
-fun AgentThinkingPlaceholder(useHighThinking: Boolean) {
+fun AgentThinkingPlaceholder(useHighThinking: Boolean, isHermes: Boolean = false) {
+    val steps = remember(useHighThinking, isHermes) {
+        if (isHermes) {
+            listOf(
+                "Establishing secure Tailscale link...",
+                "Contacting Nous Hermes API / SSH agent daemon...",
+                "Running model parameters audit...",
+                "Analyzing safety layers and preparing proposed shell action..."
+            )
+        } else {
+            listOf(
+                "Analyzing machine architecture...",
+                "Consulting Gemini live context window...",
+                "Synthesizing safe terminal proposals...",
+                "Verifying command safety bounds..."
+            )
+        }
+    }
+
+    var currentStepIndex by remember { mutableStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1200)
+            if (currentStepIndex < steps.lastIndex) {
+                currentStepIndex++
+            } else {
+                currentStepIndex = 0
+            }
+        }
+    }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = SophisticatedSurface),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, SophisticatedBorder, RoundedCornerShape(16.dp))
+            .border(1.dp, SophisticatedBorder, RoundedCornerShape(20.dp))
+            .testTag("agent_thinking_placeholder")
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            CircularProgressIndicator(
-                color = if (useHighThinking) SophisticatedAccent else SophisticatedPrimary,
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = if (useHighThinking) "Agent is analyzing system configuration and reasoning safety models..." else "Agent is formulating shell parameters...",
-                    color = SophisticatedText,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    color = if (useHighThinking) SophisticatedAccent else SophisticatedPrimary,
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
                 )
-                Text(
-                    text = if (useHighThinking) "Using gemini-3.1-pro-preview with Deep Reasoning" else "Using gemini-3.1-flash-lite-preview low-latency API",
-                    color = SophisticatedTextMuted,
-                    fontSize = 11.sp
-                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = if (isHermes) "Nous Hermes Pro Agent Thinking..." else if (useHighThinking) "Agent is analyzing system configurations..." else "Agent is formulating parameters...",
+                        color = SophisticatedText,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (isHermes) "Using Hermes-2-Pro model agent context" else if (useHighThinking) "Using Gemini 1.5 Pro Deep Reasoning Engine" else "Using low-latency Gemini 1.5 Flash API",
+                        color = SophisticatedTextMuted,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = SophisticatedBorder.copy(alpha = 0.5f), thickness = 1.dp)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Step Progress
+            steps.forEachIndexed { index, stepText ->
+                val isCompleted = index < currentStepIndex
+                val isActive = index == currentStepIndex
+                
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .background(
+                                color = when {
+                                    isCompleted -> SophisticatedAccent.copy(alpha = 0.2f)
+                                    isActive -> SophisticatedPrimary.copy(alpha = 0.2f)
+                                    else -> Color.Transparent
+                                },
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = when {
+                                    isCompleted -> SophisticatedAccent
+                                    isActive -> SophisticatedPrimary
+                                    else -> SophisticatedTextMuted.copy(alpha = 0.4f)
+                                },
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isCompleted) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = SophisticatedAccent,
+                                modifier = Modifier.size(10.dp)
+                            )
+                        } else if (isActive) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(SophisticatedPrimary, androidx.compose.foundation.shape.CircleShape)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Text(
+                        text = stepText,
+                        color = when {
+                            isCompleted -> SophisticatedText.copy(alpha = 0.6f)
+                            isActive -> SophisticatedText
+                            else -> SophisticatedTextMuted.copy(alpha = 0.5f)
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
             }
         }
     }
@@ -1090,6 +1524,240 @@ fun HistoryPanelContent(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PreviousAiCommandsRow(
+    commands: List<com.example.ui.viewmodel.GeneratedCommand>,
+    onSelectCommand: (com.example.ui.viewmodel.GeneratedCommand) -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(SophisticatedViewportBg)
+            .border(1.dp, SophisticatedBorder.copy(alpha = 0.5f))
+            .padding(vertical = 8.dp, horizontal = 12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = SophisticatedAccent,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "AI-Generated Command History",
+                    color = SophisticatedText,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            TextButton(
+                onClick = onClear,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier
+                    .height(28.dp)
+                    .testTag("clear_ai_commands_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DeleteSweep,
+                    contentDescription = null,
+                    tint = SophisticatedTextMuted,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Clear History",
+                    color = SophisticatedTextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        androidx.compose.foundation.lazy.LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(commands) { cmd ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SophisticatedSurface),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .border(1.dp, SophisticatedBorder, RoundedCornerShape(12.dp))
+                        .clickable { onSelectCommand(cmd) }
+                        .testTag("previous_ai_command_${cmd.timestamp}")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(10.dp)
+                            .widthIn(max = 240.dp)
+                    ) {
+                        Text(
+                            text = cmd.userPrompt,
+                            color = SophisticatedText,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = cmd.command,
+                            color = SophisticatedAccent,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class QuickActionItem(
+    val title: String,
+    val intent: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val description: String,
+    val color: Color
+)
+
+@Composable
+fun QuickActionsRow(
+    onTriggerIntent: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val actions = remember {
+        listOf(
+            QuickActionItem(
+                title = "Check Server Status",
+                intent = "Check Server Status",
+                icon = Icons.Default.Dns,
+                description = "CPU, RAM & service health",
+                color = Color(0xFF10B981) // Emerald Green
+            ),
+            QuickActionItem(
+                title = "Reboot Host",
+                intent = "Reboot Host",
+                icon = Icons.Default.PowerSettingsNew,
+                description = "Initiate safe system reboot",
+                color = Color(0xFFEF4444) // Alizarin Red
+            ),
+            QuickActionItem(
+                title = "Restart Web Server",
+                intent = "Restart the production web server",
+                icon = Icons.Default.Refresh,
+                description = "Restart Nginx daemon",
+                color = Color(0xFFF59E0B) // Amber Gold
+            ),
+            QuickActionItem(
+                title = "List SSH Sessions",
+                intent = "List all active SSH sessions",
+                icon = Icons.Default.List,
+                description = "View connected sessions",
+                color = Color(0xFF3B82F6) // Cobalt Blue
+            )
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(SophisticatedViewportBg)
+            .border(1.dp, SophisticatedBorder.copy(alpha = 0.5f))
+            .padding(vertical = 8.dp, horizontal = 12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Bolt,
+                contentDescription = null,
+                tint = SophisticatedAccent,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Quick Actions",
+                color = SophisticatedText,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        androidx.compose.foundation.lazy.LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(actions) { action ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SophisticatedSurface),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .border(1.dp, SophisticatedBorder, RoundedCornerShape(12.dp))
+                        .clickable { onTriggerIntent(action.intent) }
+                        .testTag("quick_action_${action.title.replace(" ", "_").lowercase()}")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .padding(10.dp)
+                            .widthIn(max = 240.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .background(action.color.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = action.icon,
+                                contentDescription = null,
+                                tint = action.color,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = action.title,
+                                color = SophisticatedText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(1.dp))
+                            Text(
+                                text = action.description,
+                                color = SophisticatedTextMuted,
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }

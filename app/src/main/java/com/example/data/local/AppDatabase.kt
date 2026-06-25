@@ -102,6 +102,7 @@ abstract class AppDatabase : RoomDatabase() {
                     useTailscale = true,
                     tailscaleIp = "100.92.14.88",
                     isActive = true,
+                    connectionStatus = "ACTIVE",
                     cpuUsage = 24,
                     ramUsage = 48,
                     diskUsage = 61,

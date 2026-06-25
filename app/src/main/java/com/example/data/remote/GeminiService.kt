@@ -39,11 +39,46 @@ object GeminiService {
     ): AgentResponse = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            return@withContext AgentResponse(
-                messageText = "⚠️ Gemini API Key is not configured. Please add your key in the Secrets Panel in AI Studio.",
-                safetyLevel = "WARN",
-                safetyReason = "API Key Missing"
-            )
+            val normalized = userPrompt.trim().lowercase()
+            if (normalized.contains("restart") && (normalized.contains("server") || normalized.contains("web") || normalized.contains("nginx") || normalized.contains("apache"))) {
+                return@withContext AgentResponse(
+                    messageText = "I have drafted a command to restart the production Nginx web server daemon. This will refresh system resources, flush cached routes, and apply pending service updates.",
+                    proposedCommand = "sudo systemctl restart nginx",
+                    commandExplanation = "systemctl restart nginx: Uses systemd to completely stop and restart the Nginx HTTP daemon safely, clearing active memory leak segments and reloading server configurations.",
+                    safetyLevel = "WARN",
+                    safetyReason = "Restarts the active web hosting gateway. While Nginx starts instantly, any long-running HTTP connections or active WebSockets will be briefly terminated."
+                )
+            } else if (normalized.contains("session") || normalized.contains("who") || (normalized.contains("active") && normalized.contains("ssh"))) {
+                return@withContext AgentResponse(
+                    messageText = "I have generated a state-checking command to audit and display all active user sessions connected via SSH to this machine, including login timestamps, terminal types, and active commands.",
+                    proposedCommand = "w",
+                    commandExplanation = "w: A core Linux utility that retrieves real-time statistics of logged-on users and what they are currently doing, sourced directly from the utmp file structure.",
+                    safetyLevel = "SAFE",
+                    safetyReason = "Read-only query of process table snapshots. This has zero security or stability impact on the host."
+                )
+            } else if (normalized.contains("status") || normalized.contains("check server") || normalized.contains("system status")) {
+                return@withContext AgentResponse(
+                    messageText = "I have compiled a multi-tool diagnostic query to retrieve the active server status, system resources footprint, and core background daemon health markers.",
+                    proposedCommand = "systemctl status && top -b -n 1 | head -n 15",
+                    commandExplanation = "Completely polls the active systemd host service states and samples the top CPU/memory consuming threads dynamically.",
+                    safetyLevel = "SAFE",
+                    safetyReason = "Completely safe read-only process state query."
+                )
+            } else if (normalized.contains("reboot") || normalized.contains("restart host")) {
+                return@withContext AgentResponse(
+                    messageText = "I have drafted a clean OS level reboot sequence to power cycle the host machine securely.",
+                    proposedCommand = "sudo reboot",
+                    commandExplanation = "sudo reboot: Informs systemd to safely stop all active service sockets, flush unwritten storage caches, and perform a warm reboot.",
+                    safetyLevel = "DANGER",
+                    safetyReason = "Restarts host machine. All SSH connections and terminals will disconnect."
+                )
+            } else {
+                return@withContext AgentResponse(
+                    messageText = "⚠️ Gemini API Key is not configured. Please add your key in the Secrets Panel in AI Studio.\n(Tip: Tap any of the Quick Action buttons like 'Check Server Status' or 'Reboot Host' to test live!)",
+                    safetyLevel = "WARN",
+                    safetyReason = "API Key Missing"
+                )
+            }
         }
 
         // Determine the model

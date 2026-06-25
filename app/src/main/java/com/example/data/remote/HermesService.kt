@@ -166,6 +166,10 @@ object HermesService {
         }
 
         val promptType = when {
+            normalized.contains("restart") && (normalized.contains("server") || normalized.contains("web") || normalized.contains("nginx") || normalized.contains("apache")) -> "restart_web"
+            normalized.contains("session") || normalized.contains("who") || (normalized.contains("active") && normalized.contains("ssh")) -> "ssh_sessions"
+            normalized.contains("reboot") || normalized.contains("restart host") -> "reboot"
+            normalized.contains("status") || normalized.contains("check server") || normalized.contains("system status") -> "status"
             normalized.contains("docker") -> "docker"
             normalized.contains("log") || normalized.contains("journal") -> "logs"
             normalized.contains("port") || normalized.contains("listen") || normalized.contains("net") -> "network"
@@ -185,6 +189,34 @@ object HermesService {
         """.trimIndent()
 
         return when (promptType) {
+            "restart_web" -> GeminiService.AgentResponse(
+                messageText = "$prefix$scratchpadText\nNous Hermes agent preparing web server restart sequence. Selected service: Nginx. Generating systemd instruction.",
+                proposedCommand = "sudo systemctl restart nginx",
+                commandExplanation = "Triggers a full systemd restart on the Nginx service to clear stale connections, rebuild active sockets, and reload core server properties.",
+                safetyLevel = "WARN",
+                safetyReason = "Restarts active server instance. Highly recommended to perform during off-peak windows."
+            )
+            "ssh_sessions" -> GeminiService.AgentResponse(
+                messageText = "$prefix$scratchpadText\nNous Hermes agent preparing SSH session audit on terminal gateways. Querying user database.",
+                proposedCommand = "w",
+                commandExplanation = "Lists logged-in system users, their terminal lines, login origins, idle timers, and the commands currently active under their process trees.",
+                safetyLevel = "SAFE",
+                safetyReason = "Completely safe read-only query of login session telemetry."
+            )
+            "reboot" -> GeminiService.AgentResponse(
+                messageText = "$prefix$scratchpadText\nNous Hermes agent preparing reboot sequence. Disbursing warm shutdown system calls.",
+                proposedCommand = "sudo reboot",
+                commandExplanation = "sudo reboot: Issues kernel level systemd warm reboot system call.",
+                safetyLevel = "DANGER",
+                safetyReason = "Power cycles the target server immediately, causing termination of active network routes."
+            )
+            "status" -> GeminiService.AgentResponse(
+                messageText = "$prefix$scratchpadText\nNous Hermes agent querying host health indices and task scheduler telemetry.",
+                proposedCommand = "systemctl status && top -b -n 1 | head -n 15",
+                commandExplanation = "Fetches the systemd unit scheduler overview and displays process resource footprints.",
+                safetyLevel = "SAFE",
+                safetyReason = "Completely safe read-only state inspection."
+            )
             "docker" -> GeminiService.AgentResponse(
                 messageText = "$prefix$scratchpadText\nNous Hermes detected Docker request on ${host.name}. Examining live containers and system overlays.",
                 proposedCommand = "docker ps --all --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}' && docker stats --no-stream",

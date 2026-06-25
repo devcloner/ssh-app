@@ -182,7 +182,11 @@ fun DashboardScreen(
                                             Icon(
                                                 imageVector = Icons.Outlined.Dns,
                                                 contentDescription = "Server",
-                                                tint = if (host.isActive) SophisticatedAccent else SophisticatedTextMuted,
+                                                tint = when (host.connectionStatus) {
+                                                    "ACTIVE" -> SophisticatedAccent
+                                                    "AUTHENTICATING" -> Color(0xFFF59E0B)
+                                                    else -> SophisticatedTextMuted
+                                                },
                                                 modifier = Modifier.size(20.dp)
                                             )
                                             Spacer(modifier = Modifier.width(12.dp))
@@ -191,13 +195,29 @@ fun DashboardScreen(
                                                 Text(host.ipOrHostname, color = SophisticatedTextMuted, fontSize = 12.sp)
                                             }
                                         }
-                                        if (host.isActive) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(8.dp)
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(SophisticatedAccent)
-                                            )
+                                        val dotColor = when (host.connectionStatus) {
+                                            "ACTIVE" -> SophisticatedAccent
+                                            "AUTHENTICATING" -> Color(0xFFF59E0B)
+                                            else -> Color(0xFFEF4444)
+                                        }
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier.size(16.dp)
+                                        ) {
+                                            if (host.connectionStatus == "AUTHENTICATING") {
+                                                CircularProgressIndicator(
+                                                    color = dotColor,
+                                                    modifier = Modifier.size(10.dp),
+                                                    strokeWidth = 1.5.dp
+                                                )
+                                            } else {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(8.dp)
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                        .background(dotColor)
+                                                )
+                                            }
                                         }
                                     }
                                 }

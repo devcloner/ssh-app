@@ -350,7 +350,13 @@ fun MainAppLayout(viewModel: TermiAgentViewModel) {
                 composable(Screen.Chat.route) {
                     ChatScreen(
                         viewModel = viewModel,
-                        onOpenDrawer = { coroutineScope.launch { drawerState.open() } }
+                        onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
+                        onNavigateToDashboard = {
+                            navController.navigate(Screen.Dashboard.route) {
+                                popUpTo(Screen.Dashboard.route) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
                     )
                 }
                 composable(Screen.Presets.route) {
