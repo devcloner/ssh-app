@@ -68,10 +68,16 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
-                MainAppLayout(viewModel)
+                CompositionLocalProvider(LocalTermiAgentViewModel provides viewModel) {
+                    MainAppLayout(viewModel)
+                }
             }
         }
     }
+}
+
+val LocalTermiAgentViewModel = staticCompositionLocalOf<TermiAgentViewModel> {
+    error("No TermiAgentViewModel provided")
 }
 
 sealed class Screen(val route: String, val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
